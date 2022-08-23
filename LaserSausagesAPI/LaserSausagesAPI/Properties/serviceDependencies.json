@@ -1,0 +1,12 @@
+{
+  "dependencies": {
+    "storage1": {
+      "type": "storage",
+      "connectionId": "CS"
+    },
+    "secrets1": {
+      "ignored": "true",
+      "type": "secrets.keyVault"
+    }
+  }
+}

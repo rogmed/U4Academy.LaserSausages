@@ -1,0 +1,42 @@
+variables:
+- name: ProjectDir
+  value: '**/LaserSausagesAPI/LaserSausagesAPI.sln'
+- name: TestsDir
+  value: '**/LaserSausagesAPI/LaserSausagesAPI.sln'
+- name: ProjectsDir
+  value: |
+    $(ProjectDir)
+    $(TestsDir)
+
+pool:
+  vmImage: 'windows-latest'
+
+trigger:
+  - none
+
+jobs:
+  - job: LaserSausagesPipeline
+    steps: 
+    - task: UseDotNet@2
+      displayName: 'Installing .NET'
+      inputs:
+        packageType: 'sdk'
+        version: '6.x'
+        includePreviewVersions: false
+    - task: DotNetCoreCLI@2
+      displayName: '.NET restore'
+      inputs:
+        command: 'restore'
+        projects: $(ProjectsDir)
+        feedsToUse: 'select'
+    - task: DotNetCoreCLI@2
+      displayName: '.NET build'
+      inputs:
+        command: 'build'
+        projects: $(ProjectsDir)
+    - task: DotNetCoreCLI@2
+      displayName: '.NET test'
+      inputs:
+        command: 'test'
+        projects: '$(TestsDir)'
+        testRunTitle: 'Unit tests'

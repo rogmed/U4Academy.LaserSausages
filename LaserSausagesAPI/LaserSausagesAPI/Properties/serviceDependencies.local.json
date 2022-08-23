@@ -1,0 +1,19 @@
+{
+  "dependencies": {
+    "secrets1": {
+      "ignored": "true",
+      "type": "secrets.keyVault"
+    },
+    "mssql1": {
+      "ignored": "true",
+      "type": "mssql",
+      "connectionId": "ConnectionStrings:LaserSausagesAPIContext"
+    },
+    "storage1": {
+      "secretStore": "LocalSecretsFile",
+      "resourceId": "/subscriptions/[parameters('subscriptionId')]/resourceGroups/[parameters('resourceGroupName')]/providers/Microsoft.Storage/storageAccounts/lasersausage",
+      "type": "storage.azure",
+      "connectionId": "CS"
+    }
+  }
+}

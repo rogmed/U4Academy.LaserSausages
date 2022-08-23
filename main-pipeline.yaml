@@ -1,0 +1,172 @@
+resources:
+  repositories:
+    - repository: TestAutomation
+      type : git
+      name : U4ERP/U4ERP.TestAutomation
+      ref : dev
+
+variables:
+- name: ProjectDir
+  value: '**/LaserSausagesAPI/LaserSausagesAPI.sln'
+- name: BranchName
+  value: $[replace(variables['Build.SourceBranchName'], 'refs/heads/', '')]
+- name: SlotName
+  value: 'production'
+- name: ArtifactName
+  value: LaserSausagesAPI
+- group: WhiteSource
+- group: U4ERP-SonarQube
+- name: WSproductName
+  value: 'Unit4 Academy'
+- name: WSprojectName
+  value: 'LaserSausagesStudentsAPI'
+- name: SQprojectName
+  value: U4Academy.LaserSausages
+- name: APIGetURL
+  value: https://lasersausages.azurewebsites.net/api/students/name
+
+pool:
+  vmImage: 'windows-latest'
+
+trigger:
+  - master
+  - release
+  - dev
+
+jobs:
+  - job: LaserSausagesPipeline
+    steps:          
+    - checkout: self
+
+    # SonarQube
+    - ${{ if eq(variables['Build.SourceBranchName'], 'dev') }}:
+      - template: Templates/Tools/SonarQubeMsBuildStart.yml@TestAutomation
+        parameters:
+          projectName: '$(SQprojectName)'
+          branchName: '$(BranchName)'
+          coveragePaths: '$(Build.SourcesDirectory)/reports/coverage/api/SonarQube.xml'
+          workingDirectory: '$(Build.SourcesDirectory)/$(Build.Repository.Name)'
+          version: '22.1'
+ 
+    - task: UseDotNet@2
+      displayName: 'Installing .NET'
+      inputs:
+        packageType: 'sdk'
+        version: '6.x'
+        includePreviewVersions: false
+    - task: DotNetCoreCLI@2
+      displayName: '.NET restore'
+      inputs:
+        command: 'restore'
+        projects: $(ProjectDir)
+        feedsToUse: 'select'
+    - task: DotNetCoreCLI@2
+      displayName: '.NET build'
+      inputs:
+        command: 'build'
+        projects: $(ProjectDir)
+    - task: DotNetCoreCLI@2
+      displayName: '.NET test'
+      inputs:
+        command: 'test'
+        projects: $(ProjectDir)
+        arguments: '--collect "XPlat Code coverage"'
+        testRunTitle: 'Unit tests'
+    
+    - task: VSBuild@1
+      inputs:
+        solution: '$(ProjectDir)'
+        vsVersion: '17.0'
+        msbuildArgs: '/p:DeployOnBuild=true /p:WebPublishMethod=Package /p:PackageAsSingleFile=true /p:SkipInvalidConfigurations=true /p:publishUrl="$(Build.ArtifactStagingDirectory)\\"'
+        platform: 'any cpu'
+        configuration: 'Release'
+    
+    # SonarQube
+    - ${{ if eq(variables['Build.SourceBranchName'], 'dev') }}:
+      - task: DotNetCoreCLI@2
+        displayName: Install ReportGenerator tool
+        inputs:
+          command: custom
+          custom: tool
+          arguments: install --tool-path . dotnet-reportgenerator-globaltool
+
+      - script: reportgenerator -reports:$(Agent.TempDirectory)/**/coverage.cobertura.xml -targetdir:$(Build.SourcesDirectory)/reports/coverage/api -reporttypes:"SonarQube"
+      
+      # SonarQube
+      - template: Templates/Tools/SonarQubeMsBuildEnd.yml@TestAutomation
+        parameters:
+          branchName: '$(BranchName)'
+          qualityGate: 'U4-FeatureServices'
+          
+    - task: PublishPipelineArtifact@1
+      displayName: 'Publish Artifact'
+      inputs:
+        targetPath: '$(Build.ArtifactStagingDirectory)'
+        artifact: $(ArtifactName)
+        publishLocation: 'pipeline'
+
+    # WhiteSource
+    - ${{ if eq(variables['Build.SourceBranchName'], 'dev') }}:
+      - template: Templates/Tools/whitesourceScanSteps.yml@TestAutomation
+        parameters:
+          ${{ if eq(variables['Build.Reason'],'BatchedCI')}}:
+            wsConfigFile: whiteSource-file.config 
+          artifactsPath: '$(Build.ArtifactStagingDirectory)'
+          pullTemplateRepo: true
+          productName: '$(WSproductName)'
+          projectName: '$(WSprojectName)'
+          userKey: $(userKey-Academy)
+
+    # And if you're going to copy paste code make sure to give credit ;)
+    - task: AzureRmWebAppDeployment@4
+      condition: in(variables['BranchName'], 'release', 'dev')
+      displayName: 'Deployment to App Service'
+      inputs:
+        ConnectionType: 'AzureRM'
+        azureSubscription: 'U4Academy-LaserSausagesTeam'
+        appType: 'webApp'
+        WebAppName: 'lasersausages'
+        deployToSlotOrASE: true
+        ResourceGroupName: 'U4Academy-LaserSausages-rg'
+        SlotName: '$(SlotName)'
+        packageForLinux: $(Pipeline.Workspace)/**/$(ArtifactName).zip
+        enableCustomDeployment: true
+        DeploymentType: 'webDeploy'
+      
+    # Smoke test
+    - task: PowerShell@2
+      condition: in(variables['BranchName'], 'release', 'dev')
+      displayName: Smoke Test
+      inputs:
+        targetType: 'inline'
+        script: |
+          function Url-OK {
+              $result = Try { (Invoke-WebRequest -Uri $(APIGetURL)).StatusCode; }
+              Catch { Write-Host "Returned status code:" $_.Exception.Response.StatusCode.Value__; return $false; }
+
+              Write-Host "Returned status code:" $result;
+
+              return $result -eq 200;
+          }
+
+          $tries = 0;
+          $MAX_TRIES = 5;
+          $SECONDS_BETWEEN_TRIES = 10;
+
+          for(($i = 0); $i -lt $MAX_TRIES; $i++) {
+              Write-Host "Try number" ($i+1)
+
+              if (Url-OK) {
+                  Write-Host "Smoke test successful";
+
+                  exit 0;
+              }
+              elseif($i -lt ($MAX_TRIES-1)) {
+                  Write-Host "Request failed, trying again in" $SECONDS_BETWEEN_TRIES "seconds";
+                  Start-Sleep -Seconds $SECONDS_BETWEEN_TRIES;
+              }
+          }
+
+          Write-Error "All $MAX_TRIES tries failed, smoke test not successful!";
+
+          exit $LASTEXITCODE;
